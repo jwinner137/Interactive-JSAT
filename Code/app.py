@@ -1,0 +1,853 @@
+import tkinter as tk
+from tkinter import simpledialog, messagebox, Toplevel, filedialog, ttk
+import networkx as nx
+import math
+import json
+
+# --- Local Modules ---
+import config
+from utils import calculate_metric
+from components import InteractiveComparisonPanel
+
+class GraphBuilderApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Interactive JSAT")
+        self.root.geometry("1400x900") 
+        
+        # --- Backend Data ---
+        self.G = nx.DiGraph()
+        self.saved_archs = {} 
+        self.undo_stack = []
+        self.redo_stack = []
+        
+        # --- State ---
+        self.selected_node = None     
+        self.inspected_node = None    
+        self.drag_node = None      
+        self.drag_start_pos = None 
+        self.is_dragging = False   
+        self.pre_drag_graph_state = None
+        self.sidebar_drag_data = None
+        
+        # --- View Settings ---
+        self.zoom = 1.0
+        self.offset_x = 0
+        self.offset_y = 0
+        self.pan_start = None 
+        
+        # --- Mode Settings ---
+        self.mode = "SELECT"
+        self.mode_buttons = {}
+        self.view_mode = config.VIEW_MODE_FREE
+        
+        self.agents = config.DEFAULT_AGENTS.copy()
+        self.current_agent = config.DEFAULT_CURRENT_AGENT
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Toolbar
+        toolbar_frame = tk.Frame(self.root, bd=1, relief=tk.RAISED)
+        toolbar_frame.pack(side=tk.TOP, fill=tk.X)
+        self.build_toolbar(toolbar_frame)
+
+        # Main Layout
+        main_container = tk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(main_container, bg="white")
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Canvas Bindings
+        self.canvas.bind("<Button-1>", self.on_mouse_down)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
+        self.canvas.bind("<Double-Button-1>", self.on_double_click)
+        
+        # Zooming
+        self.canvas.bind("<MouseWheel>", self.on_zoom)      
+        self.canvas.bind("<Button-4>", lambda e: self.on_zoom(e, 1))  
+        self.canvas.bind("<Button-5>", lambda e: self.on_zoom(e, -1)) 
+
+        # Dashboard Sidebar
+        self.dashboard_frame = tk.Frame(main_container, width=350, bg="#f0f0f0", bd=1, relief=tk.SUNKEN)
+        self.dashboard_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        self.dashboard_frame.pack_propagate(False) 
+        
+        tk.Label(self.dashboard_frame, text="Network Dashboard", font=("Arial", 14, "bold"), bg="#4a4a4a", fg="white", pady=8).pack(fill=tk.X)
+        
+        self.inspector_frame = tk.Frame(self.dashboard_frame, bg="#fff8e1", bd=2, relief=tk.GROOVE)
+        self.inspector_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Scrollable Area for Stats/Agents
+        self.scroll_canvas = tk.Canvas(self.dashboard_frame, bg="#f0f0f0")
+        self.scrollbar = tk.Scrollbar(self.dashboard_frame, orient="vertical", command=self.scroll_canvas.yview)
+        self.scrollable_content = tk.Frame(self.scroll_canvas, bg="#f0f0f0")
+
+        self.scroll_canvas.create_window((0, 0), window=self.scrollable_content, anchor="nw", width=330)
+        self.scroll_canvas.configure(yscrollcommand=self.scrollbar.set)
+        
+        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.scrollable_content.bind("<Configure>", lambda e: self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all")))
+
+        # Footer Status
+        self.status_label = tk.Label(self.root, text="Mode: Select & Inspect", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.redraw()
+
+    # --- Core Helpers ---
+
+    def get_node_layer(self, data):
+        """Returns the Y-axis layer name. Uses saved data or defaults based on type."""
+        # 1. Use existing layer if set
+        if 'layer' in data and data['layer'] in config.JSAT_LAYERS:
+            return data['layer']
+        
+        # 2. Fallback default
+        if data.get('type') == "Resource":
+            return "Base Environment" 
+        return "Distributed Work"
+
+    def get_draw_pos(self, node_id):
+        """Calculates WORLD coordinates based on current view mode."""
+        data = self.G.nodes[node_id]
+        raw_x, raw_y = data.get('pos', (100, 100))
+        
+        # If dragging in JSAT mode, show raw position until dropped
+        if self.view_mode == config.VIEW_MODE_JSAT and self.drag_node == node_id and self.is_dragging:
+            return raw_x, raw_y
+        
+        if self.view_mode == config.VIEW_MODE_FREE:
+            return raw_x, raw_y
+        else:
+            # Snap Y to the layer height
+            return raw_x, config.JSAT_LAYERS[self.get_node_layer(data)]
+
+    # --- Coordinate Transforms ---
+
+    def to_screen(self, wx, wy):
+        sx = (wx * self.zoom) + self.offset_x
+        sy = (wy * self.zoom) + self.offset_y
+        return sx, sy
+
+    def to_world(self, sx, sy):
+        wx = (sx - self.offset_x) / self.zoom
+        wy = (sy - self.offset_y) / self.zoom
+        return wx, wy
+
+    def on_zoom(self, event, direction=None):
+        if direction is None:
+            factor = 1.1 if event.delta > 0 else 0.9
+        else:
+            factor = 1.1 if direction > 0 else 0.9
+        self.zoom *= factor
+        self.redraw()
+
+    # --- Interaction Logic ---
+
+    def on_mouse_down(self, event):
+        clicked_node = None
+        # Hit detection
+        for n in self.G.nodes:
+            wx, wy = self.get_draw_pos(n)
+            sx, sy = self.to_screen(wx, wy)
+            if math.hypot(event.x - sx, event.y - sy) <= (config.NODE_RADIUS * self.zoom):
+                clicked_node = n
+                break
+                
+        if clicked_node is not None:
+            self.pre_drag_graph_state = self.G.copy()
+            self.drag_node = clicked_node
+            self.drag_start_pos = (event.x, event.y)
+            self.is_dragging = False
+        else:
+            # Edge Deletion Check
+            if self.mode == "DELETE":
+                clicked_edge = self.find_edge_at(event.x, event.y)
+                if clicked_edge:
+                    self.save_state()
+                    self.G.remove_edge(*clicked_edge)
+                    self.redraw()
+                    return 
+
+            # Background Click (Pan or Add)
+            self.inspected_node = None
+            self.pan_start = (event.x, event.y)
+            self.is_dragging = False
+            self.redraw()
+
+    def on_mouse_drag(self, event):
+        if self.drag_node is not None:
+            # Drag threshold prevents accidental moves
+            if math.hypot(event.x - self.drag_start_pos[0], event.y - self.drag_start_pos[1]) > 5: 
+                self.is_dragging = True
+                wx, wy = self.to_world(event.x, event.y)
+                self.G.nodes[self.drag_node]['pos'] = (wx, wy)
+                self.redraw()
+
+        elif self.pan_start is not None:
+            if math.hypot(event.x - self.pan_start[0], event.y - self.pan_start[1]) > 5:
+                self.is_dragging = True
+                dx = event.x - self.pan_start[0]
+                dy = event.y - self.pan_start[1]
+                self.offset_x += dx
+                self.offset_y += dy
+                self.pan_start = (event.x, event.y)
+                self.redraw()
+
+    def on_mouse_up(self, event):
+        if self.drag_node is not None:
+            if self.is_dragging: 
+                # Save history
+                self.undo_stack.append(self.pre_drag_graph_state)
+                if len(self.undo_stack) > config.HISTORY_LIMIT: 
+                    self.undo_stack.pop(0)
+                self.redo_stack.clear()
+                
+                # JSAT Snapping Logic
+                if self.view_mode == config.VIEW_MODE_JSAT:
+                    _, world_y = self.to_world(event.x, event.y)
+                    new_layer = self.get_layer_from_y(world_y)
+                    if new_layer:
+                        self.G.nodes[self.drag_node]['layer'] = new_layer
+                        world_x, _ = self.to_world(event.x, event.y)
+                        self.G.nodes[self.drag_node]['pos'] = (world_x, config.JSAT_LAYERS[new_layer])
+                        self.redraw()
+            else: 
+                # It was just a click, not a drag
+                self.handle_click(self.drag_node)
+            
+            self.drag_node = None
+            self.is_dragging = False
+
+        elif self.pan_start is not None:
+            if not self.is_dragging:
+                # Background click -> Add Node?
+                if self.mode in ["ADD_FUNC", "ADD_RES"]:
+                    self.save_state()
+                    wx, wy = self.to_world(event.x, event.y)
+                    self.add_node(wx, wy)
+            self.pan_start = None
+            self.is_dragging = False
+
+    def handle_click(self, node_id):
+        self.inspected_node = node_id
+        
+        if self.mode == "SELECT": 
+            self.redraw()
+            
+        elif self.mode == "DELETE": 
+            self.save_state()
+            self.G.remove_node(node_id)
+            self.inspected_node = None
+            self.redraw()
+            
+        elif self.mode == "ADD_EDGE":
+            if not self.selected_node: 
+                self.selected_node = node_id
+                self.redraw()
+            else:
+                if self.selected_node != node_id:
+                    # Enforce Alternating Types (Func <-> Res)
+                    type_start = self.G.nodes[self.selected_node].get('type')
+                    type_end = self.G.nodes[node_id].get('type')
+                    
+                    if type_start == type_end:
+                        messagebox.showerror("Connection Error", 
+                                             f"Cannot connect {type_start} to {type_end}.\nConnections must alternate (Func <-> Res).")
+                    else:
+                        self.save_state()
+                        self.G.add_edge(self.selected_node, node_id)
+                
+                self.selected_node = None
+                self.redraw()
+                
+        elif self.mode == "ASSIGN_AGENT":
+            if self.G.nodes[node_id]['agent'] != self.current_agent:
+                self.save_state()
+                self.assign_agent_logic(node_id, self.current_agent)
+                self.redraw()
+
+    def redraw(self):
+        self.canvas.delete("all")
+        
+        # 1. Draw Layer Lines (JSAT Mode only)
+        if self.view_mode == config.VIEW_MODE_JSAT:
+            for layer_name in config.LAYER_ORDER:
+                world_y = config.JSAT_LAYERS[layer_name]
+                _, screen_y = self.to_screen(0, world_y)
+                self.canvas.create_line(0, screen_y, 20000, screen_y, fill="#ddd", dash=(4, 4))
+                self.canvas.create_text(10, screen_y - 10, text=layer_name, anchor="w", fill="#888", font=("Arial", 8, "italic"))
+
+        # 2. Draw Edges
+        r = config.NODE_RADIUS * self.zoom
+        for u, v in self.G.edges():
+            wx1, wy1 = self.get_draw_pos(u)
+            wx2, wy2 = self.get_draw_pos(v)
+            sx1, sy1 = self.to_screen(wx1, wy1)
+            sx2, sy2 = self.to_screen(wx2, wy2)
+            
+            dx, dy = sx2 - sx1, sy2 - sy1
+            dist = math.hypot(dx, dy)
+            if dist == 0: continue
+            
+            gap = r + 2
+            # Shorten line so arrow doesn't overlap node
+            tx = sx2 - (dx/dist)*gap
+            ty = sy2 - (dy/dist)*gap
+            self.canvas.create_line(sx1, sy1, tx, ty, arrow=tk.LAST, width=2*self.zoom)
+            
+        # 3. Draw Nodes
+        for n, d in self.G.nodes(data=True):
+            wx, wy = self.get_draw_pos(n)
+            sx, sy = self.to_screen(wx, wy)
+            
+            fill = self.agents.get(d.get('agent'), "white")
+            
+            # Outline logic
+            outline = "black"
+            width = 1
+            if n == self.selected_node:
+                outline, width = "blue", 3
+            elif n == self.inspected_node:
+                outline, width = "orange", 3
+            
+            # Shape logic
+            if d.get('type') == "Function":
+                self.canvas.create_rectangle(sx-r, sy-r, sx+r, sy+r, fill=fill, outline=outline, width=width)
+            else:
+                self.canvas.create_oval(sx-r, sy-r, sx+r, sy+r, fill=fill, outline=outline, width=width)
+            
+            font_size = max(8, int(10 * self.zoom))
+            self.canvas.create_text(sx, sy, text=d.get('label',''), font=("Arial", font_size, "bold"))
+            
+        self.rebuild_dashboard()
+
+    def rebuild_dashboard(self):
+        """Refreshes the sidebar. Careful not to duplicate widgets."""
+        
+        # 1. Clear Inspector (we will rebuild it at the end)
+        for w in self.inspector_frame.winfo_children(): w.destroy()
+
+        # 2. Clear Scrollable Content (Stats & Agent List)
+        for w in self.scrollable_content.winfo_children(): w.destroy()
+        
+        # --- Stats Section ---
+        tk.Label(self.scrollable_content, text="Network Statistics", font=("Arial", 11, "bold"), bg="#f0f0f0").pack(fill=tk.X, pady=(10, 5))
+        stats_frame = tk.Frame(self.scrollable_content, bg="white", bd=1, relief=tk.SOLID)
+        stats_frame.pack(fill=tk.X, padx=5)
+        
+        tk.Label(stats_frame, text=f"Density: {calculate_metric(self.G, 'Density')}", bg="white").pack(anchor="w", padx=5)
+        tk.Label(stats_frame, text=f"Avg Clustering: {calculate_metric(self.G, 'Avg Clustering')}", bg="white").pack(anchor="w", padx=5)
+
+        # --- Agent Overview Section ---
+        tk.Label(self.scrollable_content, text="Agent Overview", font=("Arial", 11, "bold"), bg="#f0f0f0").pack(fill=tk.X, pady=(15, 2))
+        
+        # Controls
+        ctrl_frame = tk.Frame(self.scrollable_content, bg="#e0e0e0", bd=1, relief=tk.RAISED)
+        ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
+        tk.Button(ctrl_frame, text="New Agent", command=self.create_agent, bg="white").pack(pady=5)
+
+        # Group Nodes by Agent
+        agent_map = {name: [] for name in self.agents.keys()}
+        for node, data in self.G.nodes(data=True):
+            ag = data.get('agent', 'Unassigned')
+            agent_map.setdefault(ag, []).append(node)
+
+        # Render Agent List
+        for agent_name, color in self.agents.items():
+            af = tk.Frame(self.scrollable_content, bg="#e0e0e0", bd=1, relief=tk.RAISED)
+            af.pack(fill=tk.X, pady=2, padx=5)
+            # Store name on widget for drag-and-drop detection
+            af.agent_name = agent_name 
+            
+            # Header (Color + Name)
+            hf = tk.Frame(af, bg="#e0e0e0")
+            hf.pack(fill=tk.X)
+            hf.agent_name = agent_name
+            
+            # Color Box
+            cb = tk.Label(hf, bg=color, width=3)
+            cb.pack(side=tk.LEFT, padx=5)
+            cb.bind("<Button-1>", lambda e, a=agent_name: self.edit_agent(a))
+            
+            # Name Label
+            lbl = tk.Label(hf, text=agent_name, bg="#e0e0e0", font=("Arial", 10, "bold"))
+            lbl.pack(side=tk.LEFT, fill=tk.X)
+            lbl.bind("<Button-1>", lambda e, a=agent_name: self.edit_agent(a))
+
+            # Nodes List
+            nodes_list = agent_map.get(agent_name, [])
+            if nodes_list:
+                for nid in nodes_list:
+                    nlbl = self.G.nodes[nid].get('label', str(nid))
+                    btn = tk.Button(af, text=f"• {nlbl}", anchor="w", bg="white", relief=tk.FLAT, font=("Arial", 9),
+                                    command=lambda n=nid: self.handle_click(n))
+                    btn.pack(fill=tk.X, padx=10, pady=1)
+                    
+                    # Sidebar Drag Events
+                    btn.bind("<Button-1>", lambda e, n=nid: self.on_sidebar_node_press(e, n))
+                    btn.bind("<B1-Motion>", lambda e: None) 
+                    btn.bind("<ButtonRelease-1>", self.on_sidebar_node_release)
+            else:
+                tk.Label(af, text="(Empty)", bg="#e0e0e0", fg="#666", font=("Arial", 8, "italic")).pack(anchor="w", padx=10)
+
+        # --- Inspector Section (Built only once!) ---
+        if self.inspected_node is not None and self.G.has_node(self.inspected_node):
+            d = self.G.nodes[self.inspected_node]
+            
+            tk.Label(self.inspector_frame, text="SELECTED NODE INSPECTOR", bg="#fff8e1", font=("Arial", 10, "bold")).pack(pady=2)
+            
+            # ID & Label
+            r1 = tk.Frame(self.inspector_frame, bg="#fff8e1"); r1.pack(fill=tk.X, padx=5)
+            tk.Label(r1, text=f"ID: {self.inspected_node} | Lbl: {d.get('label')}", bg="#fff8e1", font=("Arial", 9, "bold")).pack(anchor="w")
+            
+            # Layer Selector
+            r2 = tk.Frame(self.inspector_frame, bg="#fff8e1"); r2.pack(fill=tk.X, padx=5, pady=2)
+            tk.Label(r2, text="Layer:", bg="#fff8e1").pack(side=tk.LEFT)
+            
+            current_layer = self.get_node_layer(d)
+            layer_var = tk.StringVar(value=current_layer)
+            layer_box = ttk.Combobox(r2, textvariable=layer_var, values=config.LAYER_ORDER, state="readonly", width=18)
+            layer_box.pack(side=tk.LEFT, padx=5)
+            
+            def on_layer_change(event):
+                self.save_state()
+                self.G.nodes[self.inspected_node]['layer'] = layer_var.get()
+                self.redraw()
+            layer_box.bind("<<ComboboxSelected>>", on_layer_change)
+
+            # Node Metrics
+            r3 = tk.Frame(self.inspector_frame, bg="#fff8e1"); r3.pack(fill=tk.X, padx=5, pady=5)
+            
+            in_d = self.G.in_degree(self.inspected_node)
+            out_d = self.G.out_degree(self.inspected_node)
+            
+            try: deg_c = nx.degree_centrality(self.G)[self.inspected_node]
+            except: deg_c = 0.0
+            
+            try: eig_c = nx.eigenvector_centrality(self.G, max_iter=100, tol=1e-04).get(self.inspected_node, 0)
+            except: eig_c = 0.0
+            
+            stat_txt = (f"In-Degree:     {in_d}\n"
+                        f"Out-Degree:    {out_d}\n"
+                        f"Degree Cent.:  {deg_c:.3f}\n"
+                        f"Eigenvector:   {eig_c:.3f}")
+            
+            tk.Label(r3, text=stat_txt, bg="#fff8e1", justify=tk.LEFT, font=("Consolas", 10)).pack(anchor="w")
+
+        else:
+            tk.Label(self.inspector_frame, text="(Select a node to inspect)", bg="#fff8e1", fg="#888").pack(pady=5)
+
+    def toggle_view(self):
+        if self.view_mode == config.VIEW_MODE_FREE:
+            self.view_mode = config.VIEW_MODE_JSAT
+            self.view_btn.config(text="👁 View: JSAT Layers")
+        else:
+            self.view_mode = config.VIEW_MODE_FREE
+            self.view_btn.config(text="👁 View: Free")
+        self.redraw()
+
+    # --- UI Components ---
+    
+    def build_toolbar(self, parent):
+        r1 = tk.Frame(parent)
+        r1.pack(fill=tk.X, pady=2)
+        
+        # History & View
+        tk.Button(r1, text="↶", command=self.undo, width=2).pack(side=tk.LEFT, padx=1)
+        tk.Button(r1, text="↷", command=self.redo, width=2).pack(side=tk.LEFT, padx=1)
+        tk.Frame(r1, width=10).pack(side=tk.LEFT)
+        self.view_btn = tk.Button(r1, text="👁 View: Free", command=self.toggle_view, bg="#e1bee7", font=("Arial", 9, "bold"))
+        self.view_btn.pack(side=tk.LEFT, padx=10)
+        
+        # Mode Buttons
+        self.create_mode_button(r1, "SELECT", "➤ Select")
+        self.create_mode_button(r1, "ADD_FUNC", "Add Func")
+        self.create_mode_button(r1, "ADD_RES", "Add Res")
+        self.create_mode_button(r1, "ADD_EDGE", "Connect")
+        self.create_mode_button(r1, "DELETE", "Delete")
+        
+        # File/Agent Ops
+        r2 = tk.Frame(parent)
+        r2.pack(fill=tk.X, pady=2)
+        
+        tk.Label(r2, text="| RAM:", fg="#888").pack(side=tk.LEFT, padx=5)
+        tk.Button(r2, text="Store Architecture", command=self.save_architecture_internal).pack(side=tk.LEFT, padx=2)
+        tk.Button(r2, text="Compare Architecture", command=self.open_comparison_dialog, bg="#ffd700", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(r2, text="| Disk:", fg="#888").pack(side=tk.LEFT, padx=5)
+        tk.Button(r2, text="Save Network", command=self.initiate_save_json).pack(side=tk.LEFT, padx=2)
+        tk.Button(r2, text="Open Network", command=self.load_from_json).pack(side=tk.LEFT, padx=2)
+        
+        self.update_mode_indicator()
+
+    def create_mode_button(self, parent, mode_key, text):
+        btn = tk.Button(parent, text=text, command=lambda: self.set_mode(mode_key))
+        btn.pack(side=tk.LEFT, padx=2)
+        self.mode_buttons[mode_key] = btn
+
+    def set_mode(self, m): 
+        self.mode = m
+        self.selected_node = None
+        self.status_label.config(text=f"Mode: {'Select' if m=='SELECT' else m}")
+        self.update_mode_indicator()
+        self.redraw()
+    
+    def update_mode_indicator(self):
+        ACTIVE_BG = "#87CEFA"
+        INACTIVE_BG = "#f0f0f0"
+        DELETE_BG = "#ffcccc"
+        
+        for mode_key, btn in self.mode_buttons.items():
+            if mode_key == self.mode:
+                btn.config(bg=ACTIVE_BG, relief=tk.SUNKEN)
+            else:
+                bg = DELETE_BG if mode_key == "DELETE" else INACTIVE_BG
+                btn.config(bg=bg, relief=tk.RAISED)
+
+    # --- Node/Agent Logic ---
+
+    def assign_agent_logic(self, node_id, agent_name):
+        self.G.nodes[node_id]['agent'] = agent_name
+        # Propagate agent to connected nodes if they are functions
+        if self.G.nodes[node_id]['type'] == "Function":
+            for n in self.G.successors(node_id): 
+                self.G.nodes[n]['agent'] = agent_name
+
+    def on_double_click(self, event):
+        # Find clicked node
+        r_screen = config.NODE_RADIUS * self.zoom
+        clicked = None
+        for n in self.G.nodes:
+            dwx, dwy = self.get_draw_pos(n)
+            sx, sy = self.to_screen(dwx, dwy)
+            if math.hypot(event.x - sx, event.y - sy) <= r_screen:
+                clicked = n
+                break
+        if clicked is not None:
+            self.open_node_editor(clicked)
+            
+    def open_node_editor(self, nid):
+        win = Toplevel(self.root)
+        win.title("Edit Node")
+        d = self.G.nodes[nid]
+        
+        tk.Label(win, text="Label:").pack()
+        e_lbl = tk.Entry(win)
+        e_lbl.insert(0, d.get('label', ''))
+        e_lbl.pack()
+        
+        def save():
+            self.save_state()
+            self.G.nodes[nid]['label'] = e_lbl.get()
+            win.destroy()
+            self.redraw()
+            
+        tk.Button(win, text="Save", command=save).pack(pady=10)
+
+    def add_node(self, x, y):
+        nid = (max(self.G.nodes)+1) if self.G.nodes else 0
+        typ = "Function" if self.mode == "ADD_FUNC" else "Resource"
+        default_layer = "Base Environment" if typ == "Resource" else "Distributed Work"
+        
+        self.G.add_node(nid, 
+                        pos=(x, y), 
+                        type=typ, 
+                        agent="Unassigned", 
+                        label="F" if typ=="Function" else "R",
+                        layer=default_layer)
+        self.redraw()
+
+    def create_agent(self):
+        n = simpledialog.askstring("Input", "Name:")
+        if n and n not in self.agents:
+            c = simpledialog.askstring("Input", "Color:") or "grey"
+            self.agents[n] = c
+            self.rebuild_dashboard()
+    
+    def edit_agent(self, agent_name):
+        win = Toplevel(self.root)
+        win.title("Edit Agent")
+        win.geometry("250x220")
+        
+        tk.Label(win, text="Name:").pack(pady=(10, 0))
+        ne = tk.Entry(win); ne.insert(0, agent_name); ne.pack()
+        
+        tk.Label(win, text="Color:").pack(pady=(10, 0))
+        ce = tk.Entry(win); ce.insert(0, self.agents[agent_name]); ce.pack()
+        
+        def save():
+            new_name, new_color = ne.get(), ce.get()
+            if new_name and new_color:
+                self.save_state()
+                del self.agents[agent_name]
+                self.agents[new_name] = new_color
+                
+                # Update nodes linked to old agent name
+                for n, d in self.G.nodes(data=True): 
+                    if d.get('agent') == agent_name: 
+                        self.G.nodes[n]['agent'] = new_name
+                
+                self.redraw()
+                win.destroy()
+
+        def delete_this_agent():
+            if agent_name == "Unassigned":
+                messagebox.showwarning("Restricted", "Cannot delete 'Unassigned'.")
+                return
+
+            if messagebox.askyesno("Delete Agent", f"Delete '{agent_name}'? Nodes will revert to Unassigned."):
+                self.save_state()
+                for n, d in self.G.nodes(data=True):
+                    if d.get('agent') == agent_name:
+                        self.G.nodes[n]['agent'] = "Unassigned"
+                
+                del self.agents[agent_name]
+                self.redraw()
+                win.destroy()
+
+        tk.Button(win, text="Save Changes", command=save, bg="#e1bee7").pack(pady=(15, 5), fill=tk.X, padx=20)
+        tk.Button(win, text="Delete Agent", command=delete_this_agent, bg="#ffcccc", fg="red").pack(pady=5, fill=tk.X, padx=20)
+
+    # --- File Operations ---
+
+    def save_state(self):
+        self.undo_stack.append(self.G.copy())
+        if len(self.undo_stack) > config.HISTORY_LIMIT: 
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+    
+    def undo(self):
+        if self.undo_stack: 
+            self.redo_stack.append(self.G.copy())
+            self.G = self.undo_stack.pop()
+            self.redraw()
+            
+    def redo(self):
+        if self.redo_stack: 
+            self.undo_stack.append(self.G.copy())
+            self.G = self.redo_stack.pop()
+            self.redraw()
+
+    def initiate_save_json(self): 
+        self.finalize_json_save(self.G, "curr")
+        
+    def finalize_json_save(self, g, n):
+        # Bake in layer data before saving so visual state persists
+        for node_id in g.nodes:
+            data = g.nodes[node_id]
+            if 'layer' not in data:
+                data['layer'] = self.get_node_layer(data)
+
+        fp = filedialog.asksaveasfilename(initialfile=n, defaultextension=".json")
+        if fp: 
+            with open(fp, 'w') as f: 
+                json.dump({
+                    "graph_data": nx.node_link_data(g),
+                    "agents": self.agents
+                }, f, indent=4)
+                
+    def load_from_json(self):
+        fp = filedialog.askopenfilename()
+        if fp:
+            with open(fp, 'r') as f: 
+                b = json.load(f)
+            self.save_state()
+            self.agents = b.get("agents", {})
+            self.G = nx.node_link_graph(b["graph_data"], directed=True)
+            
+            # Ensure tuples (json lists -> python tuples)
+            for n in self.G.nodes: 
+                self.G.nodes[n]['pos'] = tuple(self.G.nodes[n]['pos'])
+            
+            # Map string IDs back to ints if possible
+            mapping = {n: int(n) for n in self.G.nodes() if str(n).isdigit()}
+            self.G = nx.relabel_nodes(self.G, mapping)
+            self.redraw()
+
+    def save_architecture_internal(self):
+        n = simpledialog.askstring("Name", "Name:")
+        if n: 
+            self.saved_archs[n] = self.G.copy()
+    
+    def open_comparison_dialog(self):
+        av = ["Current"] + list(self.saved_archs.keys())
+        if len(av) < 1: 
+            messagebox.showinfo("Info", "No archs")
+            return
+            
+        w = Toplevel(self.root)
+        tk.Label(w, text="Select (Ctrl+Click)").pack()
+        lb = tk.Listbox(w, selectmode=tk.MULTIPLE)
+        lb.pack()
+        
+        for o in av:
+            lb.insert(tk.END, o)
+        
+        lb.selection_set(0)
+        
+        def go():
+            idx = lb.curselection()
+            names = [lb.get(i) for i in idx]
+            # Create list of (name, graph_copy)
+            gs = [(n, self.G.copy() if n == "Current" else self.saved_archs[n].copy()) for n in names]
+            
+            # Inject colors for comparison view
+            for _, g in gs:
+                for n, d in g.nodes(data=True): 
+                    d['_color_cache'] = self.agents.get(d.get('agent'), "white")
+            
+            w.destroy()
+            self.launch_compare(gs)
+            
+        tk.Button(w, text="Go", command=go).pack()
+        
+    def launch_compare(self, gs):
+        w = Toplevel(self.root)
+        w.title("Comparative Analytics")
+        w.geometry("1200x800")
+        w.update_idletasks()
+        
+        tf = tk.Frame(w, bd=2, relief=tk.RAISED)
+        tf.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        
+        paned = tk.PanedWindow(w, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        graph_container = tk.Frame(paned)
+        paned.add(graph_container, minsize=400)
+        
+        inspector_frame = tk.Frame(paned, bd=2, relief=tk.SUNKEN, bg="#f0f0f0")
+        paned.add(inspector_frame, minsize=150)
+
+        def refresh_metrics():
+            for widget in tf.winfo_children(): widget.destroy()
+            tk.Label(tf, text="System Metrics Comparison", font=("Arial", 12, "bold")).pack(pady=5)
+            
+            grid_f = tk.Frame(tf)
+            grid_f.pack(fill=tk.X)
+            
+            metrics = ["Nodes", "Edges", "Density", "Avg Degree", "Avg Clustering"]
+            tk.Label(grid_f, text="Metric", font=("Arial", 10, "bold"), width=15, relief="solid", bd=1).grid(row=0, column=0, sticky="nsew")
+            
+            for i, (name, _) in enumerate(gs):
+                tk.Label(grid_f, text=name, font=("Arial", 10, "bold"), width=15, relief="solid", bd=1).grid(row=0, column=i+1, sticky="nsew")
+                
+            for r, m in enumerate(metrics):
+                tk.Label(grid_f, text=m, font=("Arial", 10), relief="solid", bd=1).grid(row=r+1, column=0, sticky="nsew")
+                for c, (_, g) in enumerate(gs):
+                    val = calculate_metric(g, m)
+                    tk.Label(grid_f, text=str(val), relief="solid", bd=1).grid(row=r+1, column=c+1, sticky="nsew")
+
+        def refresh_inspector(label):
+            for widget in inspector_frame.winfo_children(): widget.destroy()
+            if not label:
+                tk.Label(inspector_frame, text="Click a node to inspect across networks.", bg="#f0f0f0", font=("Arial", 12)).pack(pady=20)
+                return
+            
+            tk.Label(inspector_frame, text=f"Inspecting Node: '{label}'", bg="#f0f0f0", font=("Arial", 12, "bold")).pack(pady=5)
+            grid_f = tk.Frame(inspector_frame, bg="#f0f0f0")
+            grid_f.pack(padx=10, pady=5)
+            
+            headers = ["Network", "Agent", "In-Degree", "Out-Degree", "Degree Cent.", "Eigenvector Cent."]
+            for i, h in enumerate(headers):
+                tk.Label(grid_f, text=h, font=("Arial", 10, "bold"), bg="#ddd", relief="solid", bd=1, width=18).grid(row=0, column=i, sticky="nsew")
+            
+            for r, (name, g) in enumerate(gs):
+                target_node = None
+                for n, d in g.nodes(data=True):
+                    if d.get('label') == label:
+                        target_node = n
+                        break
+                
+                vals = [name]
+                if target_node is not None:
+                    d = g.nodes[target_node]
+                    vals.append(d.get('agent', 'N/A'))
+                    vals.append(g.in_degree(target_node))
+                    vals.append(g.out_degree(target_node))
+                    try: dc = f"{nx.degree_centrality(g)[target_node]:.3f}"
+                    except: dc = "0.00"
+                    vals.append(dc)
+                    try: ec = f"{nx.eigenvector_centrality(g, max_iter=500).get(target_node, 0):.3f}"
+                    except: ec = "0.00"
+                    vals.append(ec)
+                else:
+                    vals.extend(["(Not Found)", "-", "-", "-", "-"])
+                
+                for c, v in enumerate(vals):
+                    tk.Label(grid_f, text=str(v), relief="solid", bd=1, bg="white").grid(row=r+1, column=c, sticky="nsew")
+
+        refresh_metrics()
+        refresh_inspector(None)
+        
+        for n, g in gs:
+            InteractiveComparisonPanel(graph_container, g, n, config.NODE_RADIUS, self.agents, None, refresh_inspector)
+
+    # --- Helpers ---
+
+    def get_layer_from_y(self, y):
+        """Finds closest JSAT layer key given a Y coordinate."""
+        closest_layer = None
+        min_dist = 9999
+        for name, ly in config.JSAT_LAYERS.items():
+            dist = abs(y - ly)
+            if dist < min_dist:
+                min_dist = dist
+                closest_layer = name
+        return closest_layer
+
+    def on_sidebar_node_press(self, event, node_id):
+        self.sidebar_drag_data = node_id
+        self.root.config(cursor="hand2")
+
+    def on_sidebar_node_release(self, event):
+        self.root.config(cursor="")
+        if self.sidebar_drag_data is None: return
+        
+        # Detect drop on agent label
+        target_widget = self.root.winfo_containing(event.x_root, event.y_root)
+        found_agent = None
+        curr = target_widget
+        while curr:
+            if hasattr(curr, "agent_name"):
+                found_agent = curr.agent_name
+                break
+            curr = curr.master
+            if curr == self.root: break
+            
+        if found_agent:
+            self.save_state()
+            self.assign_agent_logic(self.sidebar_drag_data, found_agent)
+            self.redraw()
+        self.sidebar_drag_data = None
+
+    def distance_point_to_segment(self, px, py, x1, y1, x2, y2):
+        """Math helper for edge detection."""
+        dx, dy = x2 - x1, y2 - y1
+        if dx == 0 and dy == 0:
+            return math.hypot(px - x1, py - y1)
+        
+        t = ((px - x1) * dx + (py - y1) * dy) / (dx*dx + dy*dy)
+        t = max(0, min(1, t))
+        
+        nearest_x = x1 + t * dx
+        nearest_y = y1 + t * dy
+        return math.hypot(px - nearest_x, py - nearest_y)
+    
+    def find_edge_at(self, x, y):
+        threshold = 8 
+        for u, v in self.G.edges():
+            wx1, wy1 = self.get_draw_pos(u)
+            wx2, wy2 = self.get_draw_pos(v)
+            sx1, sy1 = self.to_screen(wx1, wy1)
+            sx2, sy2 = self.to_screen(wx2, wy2)
+            
+            dist = self.distance_point_to_segment(x, y, sx1, sy1, sx2, sy2)
+            if dist < threshold:
+                return (u, v)
+        return None

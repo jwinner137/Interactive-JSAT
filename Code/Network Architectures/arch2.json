@@ -1,0 +1,121 @@
+{
+    "graph_data": {
+        "directed": true,
+        "multigraph": false,
+        "graph": {},
+        "nodes": [
+            {
+                "pos": [
+                    172,
+                    135
+                ],
+                "type": "Function",
+                "agent": "command",
+                "label": "move",
+                "id": 0
+            },
+            {
+                "pos": [
+                    186,
+                    280
+                ],
+                "type": "Function",
+                "agent": "drone",
+                "label": "monitor",
+                "id": 1
+            },
+            {
+                "pos": [
+                    296,
+                    165
+                ],
+                "type": "Function",
+                "agent": "command",
+                "label": "detect",
+                "id": 2
+            },
+            {
+                "pos": [
+                    378,
+                    52
+                ],
+                "type": "Resource",
+                "agent": "sal",
+                "label": "Res",
+                "id": 3
+            },
+            {
+                "pos": [
+                    398,
+                    179
+                ],
+                "type": "Resource",
+                "agent": "sal",
+                "label": "Res",
+                "id": 4
+            },
+            {
+                "pos": [
+                    410,
+                    273
+                ],
+                "type": "Resource",
+                "agent": "drone",
+                "label": "Res",
+                "id": 5
+            },
+            {
+                "pos": [
+                    586,
+                    165
+                ],
+                "type": "Function",
+                "agent": "sal",
+                "label": "F",
+                "id": 6
+            },
+            {
+                "pos": [
+                    673,
+                    95
+                ],
+                "type": "Resource",
+                "agent": "sal",
+                "label": "R",
+                "id": 7
+            }
+        ],
+        "edges": [
+            {
+                "source": 0,
+                "target": 3
+            },
+            {
+                "source": 1,
+                "target": 5
+            },
+            {
+                "source": 2,
+                "target": 4
+            },
+            {
+                "source": 3,
+                "target": 6
+            },
+            {
+                "source": 4,
+                "target": 6
+            },
+            {
+                "source": 6,
+                "target": 7
+            }
+        ]
+    },
+    "agents": {
+        "Unassigned": "white",
+        "sal": "red",
+        "drone": "green",
+        "command": "yellow"
+    }
+}
