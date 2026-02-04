@@ -1,0 +1,53 @@
+{
+    "GraphData": {
+        "Nodes": {
+            "ComputeLogic": { "Type": "DistributedWorkFunction", "UserData": "ComputeLogic" },
+            "RenderGraphics": { "Type": "DistributedWorkFunction", "UserData": "RenderGraphics" },
+            "StoreVolatileData": { "Type": "DistributedWorkFunction", "UserData": "StoreVolatileData" },
+            "SupplyPower": { "Type": "DistributedWorkFunction", "UserData": "SupplyPower" },
+            "DissipateHeat": { "Type": "DistributedWorkFunction", "UserData": "DissipateHeat" },
+            "ProvideStructure": { "Type": "DistributedWorkFunction", "UserData": "ProvideStructure" },
+            "ConnectToInternet": { "Type": "DistributedWorkFunction", "UserData": "ConnectToInternet" },
+            "DisplayImage": { "Type": "DistributedWorkFunction", "UserData": "DisplayImage" },
+
+            "SoC_Silicon": { "Type": "BaseEnvironmentResource", "UserData": "SoC_Silicon (System on Chip)" },
+            "UnibodyChassis": { "Type": "BaseEnvironmentResource", "UserData": "UnibodyChassis (Metal/Glass)" },
+            "BatteryPouch": { "Type": "BaseEnvironmentResource", "UserData": "BatteryPouch (Glued)" },
+            "OLEDStack": { "Type": "BaseEnvironmentResource", "UserData": "OLEDStack (Laminated)" }
+        },
+        "Edges": [
+            { "Source": "ComputeLogic", "Target": "SoC_Silicon", "UserData": { "QOS": "SHARED_SILICON" } },
+            { "Source": "SoC_Silicon", "Target": "ComputeLogic", "UserData": { "QOS": "" } },
+
+            { "Source": "RenderGraphics", "Target": "SoC_Silicon", "UserData": { "QOS": "SHARED_SILICON" } },
+            { "Source": "SoC_Silicon", "Target": "RenderGraphics", "UserData": { "QOS": "" } },
+
+            { "Source": "StoreVolatileData", "Target": "SoC_Silicon", "UserData": { "QOS": "UNIFIED_MEMORY_ARCH" } },
+            { "Source": "SoC_Silicon", "Target": "StoreVolatileData", "UserData": { "QOS": "" } },
+
+            { "Source": "ConnectToInternet", "Target": "SoC_Silicon", "UserData": { "QOS": "INTEGRATED_MODEM" } },
+            { "Source": "SoC_Silicon", "Target": "ConnectToInternet", "UserData": { "QOS": "" } },
+
+            { "Source": "DissipateHeat", "Target": "UnibodyChassis", "UserData": { "QOS": "PASSIVE_CONDUCTION" } },
+            { "Source": "UnibodyChassis", "Target": "DissipateHeat", "UserData": { "QOS": "" } },
+            
+            { "Source": "ProvideStructure", "Target": "UnibodyChassis", "UserData": { "QOS": "FRAME" } },
+            { "Source": "UnibodyChassis", "Target": "ProvideStructure", "UserData": { "QOS": "" } },
+
+            { "Source": "DisplayImage", "Target": "OLEDStack", "UserData": { "QOS": "DISPLAY" } },
+            { "Source": "OLEDStack", "Target": "DisplayImage", "UserData": { "QOS": "" } },
+
+            { "Source": "SupplyPower", "Target": "BatteryPouch", "UserData": { "QOS": "SPACE_CONSTRAINED" } },
+            { "Source": "BatteryPouch", "Target": "SupplyPower", "UserData": { "QOS": "" } },
+
+            { "Source": "SoC_Silicon", "Target": "UnibodyChassis", "UserData": { "QOS": "THERMAL_DUMP" } },
+            { "Source": "BatteryPouch", "Target": "UnibodyChassis", "UserData": { "QOS": "STRUCTURAL_ADHESIVE" } },
+            { "Source": "OLEDStack", "Target": "UnibodyChassis", "UserData": { "QOS": "STRUCTURAL_MEMBER" } }
+        ],
+        "Agents": {
+            "OperatingSystem": {
+                "Authority": ["SoC_Silicon", "OLEDStack"]
+            }
+        }
+    }
+}

@@ -1,0 +1,52 @@
+{
+    "GraphData": {
+        "Nodes": {
+            "GenerateLift": { "Type": "DistributedWorkFunction", "UserData": "GenerateLift" },
+            "ControlYaw": { "Type": "DistributedWorkFunction", "UserData": "ControlYaw" },
+            "ControlPitch": { "Type": "DistributedWorkFunction", "UserData": "ControlPitch" },
+            "GenerateThrust": { "Type": "DistributedWorkFunction", "UserData": "GenerateThrust" },
+            "CoolSystems": { "Type": "DistributedWorkFunction", "UserData": "CoolSystems" },
+            "StoreFuel": { "Type": "DistributedWorkFunction", "UserData": "StoreFuel" },
+            "MaintainStealth": { "Type": "DistributedWorkFunction", "UserData": "MaintainStealth" },
+
+            "BlendedWingBody": { "Type": "BaseEnvironmentResource", "UserData": "BlendedWingBody (All-in-One)" },
+            "BuriedEngineBay": { "Type": "BaseEnvironmentResource", "UserData": "BuriedEngineBay (Structural)" },
+            "RecirculatingFuel": { "Type": "BaseEnvironmentResource", "UserData": "RecirculatingFuel (Heat Sink)" }
+        },
+        "Edges": [
+            { "Source": "GenerateLift", "Target": "BlendedWingBody", "UserData": { "QOS": "SHARED_SURFACE" } },
+            { "Source": "BlendedWingBody", "Target": "GenerateLift", "UserData": { "QOS": "" } },
+
+            { "Source": "ControlYaw", "Target": "BlendedWingBody", "UserData": { "QOS": "DRAG_RUDDER_INTEGRATED" } },
+            { "Source": "BlendedWingBody", "Target": "ControlYaw", "UserData": { "QOS": "" } },
+
+            { "Source": "ControlPitch", "Target": "BlendedWingBody", "UserData": { "QOS": "ELEVON_INTEGRATED" } },
+            { "Source": "BlendedWingBody", "Target": "ControlPitch", "UserData": { "QOS": "" } },
+
+            { "Source": "GenerateThrust", "Target": "BuriedEngineBay", "UserData": { "QOS": "EMBEDDED_PROPULSION" } },
+            { "Source": "BuriedEngineBay", "Target": "GenerateThrust", "UserData": { "QOS": "" } },
+
+            { "Source": "MaintainStealth", "Target": "BlendedWingBody", "UserData": { "QOS": "SHAPE_DEPENDENT" } },
+            { "Source": "BlendedWingBody", "Target": "MaintainStealth", "UserData": { "QOS": "" } },
+
+            { "Source": "MaintainStealth", "Target": "BuriedEngineBay", "UserData": { "QOS": "THERMAL_HIDING" } },
+            { "Source": "BuriedEngineBay", "Target": "MaintainStealth", "UserData": { "QOS": "" } },
+
+            { "Source": "CoolSystems", "Target": "RecirculatingFuel", "UserData": { "QOS": "FUEL_AS_COOLANT" } },
+            { "Source": "RecirculatingFuel", "Target": "CoolSystems", "UserData": { "QOS": "" } },
+
+            { "Source": "StoreFuel", "Target": "RecirculatingFuel", "UserData": { "QOS": "STORAGE" } },
+            { "Source": "RecirculatingFuel", "Target": "StoreFuel", "UserData": { "QOS": "" } },
+
+            { "Source": "GenerateThrust", "Target": "RecirculatingFuel", "UserData": { "QOS": "CONSUMES" } }, 
+            { "Source": "RecirculatingFuel", "Target": "GenerateThrust", "UserData": { "QOS": "" } },
+
+            { "Source": "BuriedEngineBay", "Target": "BlendedWingBody", "UserData": { "QOS": "STRUCTURAL_FUSION" } }
+        ],
+        "Agents": {
+            "FlightControlComputer": {
+                "Authority": ["GenerateLift", "ControlYaw", "ControlPitch", "GenerateThrust", "MaintainStealth"]
+            }
+        }
+    }
+}

@@ -6,8 +6,9 @@ import json
 
 import config
 from utils import calculate_metric
-from components import InteractiveComparisonPanel
+from components import InteractiveComparisonPanel, CreateToolTip
 import metric_visualizations
+from PIL import ImageGrab
 
 class GraphBuilderApp:
     def __init__(self, root):
@@ -385,9 +386,76 @@ class GraphBuilderApp:
             self.current_highlights = metric_visualizations.get_cycle_highlights(self.G)
         elif mode == "interdependence":
             self.current_highlights = metric_visualizations.get_interdependence_highlights(self.G)
+        elif mode == "modularity":
+            self.current_highlights = metric_visualizations.get_modularity_highlights(self.G)
             
         self.redraw()
 
+    def _create_scrollable_list_ui(self, parent, label_text, items, colors, click_callback, label_click_callback=None):
+        """
+        Generic helper to create a scrollable list of clickable buttons.
+        items: List of dictionaries [{'label': str, 'tooltip': str}]
+        label_click_callback: Optional function to run when the main text is clicked.
+        """
+        container = tk.Frame(parent, bg=parent.cget('bg'))
+        
+        # 1. Handle Empty Case
+        if not items:
+             tk.Label(container, text=f"{label_text} (None)", bg=parent.cget('bg')).pack(anchor="w")
+             return container
+
+        # 2. Main Label (Fixed on Left)
+        # We assign it to 'lbl' so we can configure it if a callback exists
+        lbl = tk.Label(container, text=f"{label_text} [", bg=parent.cget('bg'))
+        lbl.pack(side=tk.LEFT, anchor="n", pady=2)
+        
+        # --- NEW: Make Label Clickable if requested ---
+        if label_click_callback:
+            lbl.config(fg="blue", cursor="hand2")
+            lbl.bind("<Button-1>", lambda e: label_click_callback())
+        # ----------------------------------------------
+        
+        # 3. Scrollable Window Setup
+        scroll_wrapper = tk.Frame(container, bg="white")
+        scroll_wrapper.pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="n")
+
+        h_scroll = tk.Scrollbar(scroll_wrapper, orient=tk.HORIZONTAL)
+        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        h_canvas = tk.Canvas(scroll_wrapper, height=25, bg="white", highlightthickness=0, xscrollcommand=h_scroll.set)
+        h_canvas.pack(side=tk.TOP, fill=tk.X, expand=True)
+        h_scroll.config(command=h_canvas.xview)
+        
+        inner_frame = tk.Frame(h_canvas, bg="white")
+        h_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+        
+        # 4. Generate Buttons
+        for i, item in enumerate(items):
+            txt_color = colors[i % len(colors)]
+            
+            btn = tk.Label(inner_frame, text=str(item['label']), font=("Arial", 14, "bold"), 
+                           fg=txt_color, cursor="hand2", bg="white")
+            btn.pack(side=tk.LEFT)
+            
+            btn.bind("<Button-1>", lambda e, idx=i: click_callback(idx))
+            
+            if item.get('tooltip'):
+                CreateToolTip(btn, text=item['tooltip'])
+
+            if i < len(items) - 1:
+                tk.Label(inner_frame, text=", ", bg="white").pack(side=tk.LEFT)
+        
+        tk.Label(inner_frame, text=" ]", bg="white").pack(side=tk.LEFT)
+        
+        inner_frame.update_idletasks()
+        h_canvas.config(scrollregion=h_canvas.bbox("all"))
+        
+        def _on_scroll(event):
+            h_canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+        h_canvas.bind("<MouseWheel>", _on_scroll)
+        
+        return container
+    
     def rebuild_dashboard(self):
         """Refreshes the sidebar. Careful not to duplicate widgets."""
         
@@ -405,92 +473,81 @@ class GraphBuilderApp:
         tk.Label(stats_frame, text=f"Density: {calculate_metric(self.G, 'Density')}", bg="white").pack(anchor="w", padx=5)
         tk.Label(stats_frame, text=f"Avg Clustering: {calculate_metric(self.G, 'Avg Clustering')}", bg="white").pack(anchor="w", padx=5)
         tk.Label(stats_frame, text=f"Cyclomatic No.: {calculate_metric(self.G, 'Cyclomatic Number')}", bg="white").pack(anchor="w", padx=5)
-        tk.Label(stats_frame, text=f"Critical Loop Nodes: {calculate_metric(self.G, 'Critical Loop Nodes')}", bg="white").pack(anchor="w", padx=5)
-        # Making Total Cycles label a clickable button
-        # tk.Label(stats_frame, text=f"Total Cycles: {calculate_metric(self.G, 'Total Cycles')}", bg="white").pack(anchor="w", padx=5)
-        cyc_val = calculate_metric(self.G, 'Total Cycles')
-        lbl_cyc = tk.Label(stats_frame, text=f"Total Cycles: {cyc_val}", bg="white", cursor="hand2", fg="blue")
-        lbl_cyc.pack(anchor="w", padx=5)
-        lbl_cyc.bind("<Button-1>", lambda e: self.trigger_visual_analytics("cycles"))
-
-        #Making Interdependence a clickable button
-        # tk.Label(stats_frame, text=f"Interdependence: {calculate_metric(self.G, 'Interdependence')}", bg="white").pack(anchor="w", padx=5)
+        
+        # --- Interdependence (Clickable) ---
         int_val = calculate_metric(self.G, 'Interdependence')
         lbl_int = tk.Label(stats_frame, text=f"Interdependence: {int_val}", bg="white", cursor="hand2", fg="blue")
         lbl_int.pack(anchor="w", padx=5)
         lbl_int.bind("<Button-1>", lambda e: self.trigger_visual_analytics("interdependence"))
 
-        # Add click-able buttons for individual cycle highglighting
-        #tk.Label(stats_frame, text=f"Avg Cycle Len: {calculate_metric(self.G, 'Avg Cycle Length')}", bg="white").pack(anchor="w", padx=5)
-        # --- Interactive Avg Cycle Length (Scrollable) ---
-        # 1. Main Container for the Row
-        ac_container = tk.Frame(stats_frame, bg="white")
-        ac_container.pack(fill=tk.X, padx=5, pady=2)
+        # --- Total Cycles (Clickable) ---
+        cyc_val = calculate_metric(self.G, 'Total Cycles')
+        lbl_cyc = tk.Label(stats_frame, text=f"Total Cycles: {cyc_val}", bg="white", cursor="hand2", fg="blue")
+        lbl_cyc.pack(anchor="w", padx=5)
+        lbl_cyc.bind("<Button-1>", lambda e: self.trigger_visual_analytics("cycles"))
+
+        # --- Avg Cycle Length (Using Helper) ---
+        cycles = list(nx.simple_cycles(self.G))
+        cycle_items = []
+        if cycles:
+            lengths = [len(c) for c in cycles]
+            avg = sum(lengths) / len(lengths)
+            lbl_text = f"Avg Cycle Length: {avg:.2f}"
+            for i, c in enumerate(cycles):
+                # Tooltip: "NodeA -> NodeB -> NodeC"
+                path_str = " -> ".join([str(self.G.nodes[n].get('label', n)) for n in c])
+                cycle_items.append({'label': len(c), 'tooltip': f"Cycle {i+1}:\n{path_str}"})
+        else:
+            lbl_text = "Avg Cycle Length: 0.0"
+
+        cycle_colors = ["blue"]
         
-        try:
-            cycles = list(nx.simple_cycles(self.G))
-            if not cycles:
-                 tk.Label(ac_container, text="Avg Cycle Length: 0.0", bg="white").pack(anchor="w")
-            else:
-                lengths = [len(c) for c in cycles]
-                avg = sum(lengths) / len(lengths)
-                
-                # 2. Fixed Label on Left: "Avg Cycle Length: 4.67 ["
-                tk.Label(ac_container, text=f"Avg Cycle Length: {avg:.2f} [", bg="white").pack(side=tk.LEFT, anchor="n", pady=2)
-                
-                # 3. Scrollable Area for the Numbers
-                scroll_wrapper = tk.Frame(ac_container, bg="white")
-                scroll_wrapper.pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="n")
+        def on_main_cycle_click(idx): 
+            self.trigger_single_cycle_vis(idx)
+            
+        c_ui = self._create_scrollable_list_ui(stats_frame, lbl_text, cycle_items, cycle_colors, on_main_cycle_click)
+        c_ui.pack(fill=tk.X, padx=5, pady=2)
 
-                # Horizontal Scrollbar
-                h_scroll = tk.Scrollbar(scroll_wrapper, orient=tk.HORIZONTAL)
-                h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-                
-                # Canvas (Holds the buttons)
-                h_canvas = tk.Canvas(scroll_wrapper, height=25, bg="white", highlightthickness=0, xscrollcommand=h_scroll.set)
-                h_canvas.pack(side=tk.TOP, fill=tk.X, expand=True)
-                h_scroll.config(command=h_canvas.xview)
-                
-                # Inner Frame (Lives inside Canvas)
-                inner_frame = tk.Frame(h_canvas, bg="white")
-                h_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
-                
-                # 4. Interactive Buttons
-                cycle_colors = [
-                    "#FF1493", "#00C000", "#008B8B", "#DAA520", 
-                    "#FF4500", "#9400D3", "#32CD32", "#1E90FF"
-                ]
-
-                for i, length in enumerate(lengths):
-                    txt_color = cycle_colors[i % len(cycle_colors)]
-                    
-                    btn = tk.Label(inner_frame, text=str(length), font=("Arial", 14, "bold"), 
-                                   fg="blue", cursor="hand2", bg="white")
-                    btn.pack(side=tk.LEFT)
-                    btn.bind("<Button-1>", lambda e, idx=i: self.trigger_single_cycle_vis(idx))
-                    
-                    # Add comma
-                    if i < len(lengths) - 1:
-                        tk.Label(inner_frame, text=", ", bg="white").pack(side=tk.LEFT)
-                
-                # Closing Bracket
-                tk.Label(inner_frame, text=" ]", bg="white").pack(side=tk.LEFT)
-                
-                # 5. Update Scroll Region (Crucial step to make scrolling work)
-                inner_frame.update_idletasks()
-                h_canvas.config(scrollregion=h_canvas.bbox("all"))
-                
-                # Optional: Mousewheel scrolling support
-                def _on_scroll(event):
-                    h_canvas.xview_scroll(int(-1*(event.delta/120)), "units")
-                h_canvas.bind("<MouseWheel>", _on_scroll)
-
-        except Exception as e:
-            tk.Label(ac_container, text="Err", bg="white").pack(side=tk.LEFT)
-            print(f"Cycle calc error: {e}")
-
+        # --- Global Efficiency ---
         tk.Label(stats_frame, text=f"Global Efficiency: {calculate_metric(self.G, 'Global Efficiency')}", bg="white").pack(anchor="w", padx=5)
-        tk.Label(stats_frame, text=f"Modularity: {calculate_metric(self.G, 'Modularity')}", bg="white").pack(anchor="w", padx=5)
+
+        # --- Modularity (Using Helper) ---
+        # --- Modularity (Using Helper) ---
+        try:
+            mod_val = calculate_metric(self.G, 'Modularity')
+            comms = list(nx.community.greedy_modularity_communities(self.G.to_undirected()))
+            comms.sort(key=len, reverse=True)
+            
+            mod_items = []
+            for i, c in enumerate(comms):
+                node_names = [str(self.G.nodes[n].get('label', n)) for n in c]
+                tt_text = f"Group {i+1} ({len(c)} nodes):\n" + ", ".join(node_names)
+                mod_items.append({'label': len(c), 'tooltip': tt_text})
+
+            mod_colors = ["blue"] # <--- Fixed Variable Name
+            
+            # Click Handler 1: Individual Group
+            def on_main_mod_click(idx): 
+                self.trigger_single_modularity_vis(idx)
+
+            # Click Handler 2: All Modules (NEW)
+            def on_mod_label_click():
+                self.trigger_visual_analytics("modularity")
+
+            # Pass both callbacks
+            m_ui = self._create_scrollable_list_ui(
+                stats_frame, 
+                f"Modularity: {mod_val}", 
+                mod_items, 
+                mod_colors, 
+                on_main_mod_click,
+                label_click_callback=on_mod_label_click # <--- NEW Argument
+            )
+            m_ui.pack(fill=tk.X, padx=5, pady=2)
+            
+        except Exception as e:
+            print(f"Mod UI Error: {e}")
+            tk.Label(stats_frame, text="Modularity: Err", bg="white").pack(anchor="w", padx=5)
 
         # --- Agent Overview Section ---
         tk.Label(self.scrollable_content, text="Agent Overview", font=("Arial", 14, "bold"), bg="#f0f0f0").pack(fill=tk.X, pady=(15, 2))
@@ -638,6 +695,7 @@ class GraphBuilderApp:
         tk.Label(r2, text="| Disk:", fg="#888").pack(side=tk.LEFT, padx=5)
         tk.Button(r2, text="Save Network", command=self.initiate_save_json).pack(side=tk.LEFT, padx=2)
         tk.Button(r2, text="Open Network", command=self.load_from_json).pack(side=tk.LEFT, padx=2)
+        tk.Button(r2, text="📷 Save as Image", command=self.export_as_image, bg="#e0e0e0").pack(side=tk.LEFT, padx=2)
         
         self.update_mode_indicator()
 
@@ -789,6 +847,35 @@ class GraphBuilderApp:
             self.G = self.redo_stack.pop()
             self.redraw()
 
+    # Place this method inside the GraphBuilderApp class (e.g., near save_architecture_internal)
+    def export_as_image(self):
+        # 1. Ask user where to save
+        fp = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG Image", "*.png"), ("All Files", "*.*")],
+            title="Save Graph Image"
+        )
+        if not fp: return
+
+        try:
+            # 2. Get canvas coordinates relative to the screen
+            # We need absolute screen coordinates for ImageGrab
+            x = self.canvas.winfo_rootx()
+            y = self.canvas.winfo_rooty()
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
+            
+            # 3. Take a screenshot of exactly that area
+            # Note: The window must be visible (not covered) for this to work!
+            image = ImageGrab.grab(bbox=(x, y, x+w, y+h))
+            
+            # 4. Save the file
+            image.save(fp)
+            messagebox.showinfo("Success", f"Image saved to:\n{fp}")
+            
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Could not save PNG:\n{str(e)}")
+    
     def initiate_save_json(self): 
         self.finalize_json_save(self.G, "curr")
         
@@ -1008,6 +1095,29 @@ class GraphBuilderApp:
         # Top Frame for System Metrics
         tf = tk.Frame(w, bd=2, relief=tk.RAISED)
         tf.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+        header_row = tk.Frame(tf)
+        header_row.pack(fill=tk.X, pady=5)
+        
+        tk.Label(header_row, text="Comparative Analytics", font=("Arial", 16, "bold")).pack(side=tk.LEFT, padx=10)
+        
+        def export_graphs_ps():
+            # Saves each visible panel as a .ps file
+            for name, panel in panels:
+                try:
+                    # Clean filename (remove spaces)
+                    safe_name = "".join(x for x in name if x.isalnum())
+                    fname = f"export_{safe_name}.ps"
+                    
+                    # Canvas.postscript is a native Tkinter method
+                    panel.canvas.postscript(file=fname, colormode='color')
+                    print(f"Saved {fname}")
+                except Exception as e:
+                    messagebox.showerror("Export Error", str(e))
+            
+            messagebox.showinfo("Export Complete", f"Saved {len(panels)} graph images (.ps) to project folder.")
+
+        tk.Button(header_row, text="💾 Export Graphs (.ps)", command=export_graphs_ps, bg="#e0e0e0").pack(side=tk.RIGHT, padx=10)
         
         # Paned Window for Graphs vs Inspector
         paned = tk.PanedWindow(w, orient=tk.VERTICAL)
@@ -1029,13 +1139,15 @@ class GraphBuilderApp:
                 elif metric_name == "Interdependence":
                     hl = metric_visualizations.get_interdependence_highlights(panel.G)
                     panel.set_highlights(hl)
+                elif metric_name == "Modularity":
+                    hl = metric_visualizations.get_modularity_highlights(panel.G)
+                    panel.set_highlights(hl)
                 else:
                     panel.set_highlights([]) # Clear
 
         def refresh_metrics():
             # Clear previous widgets
             for widget in tf.winfo_children(): widget.destroy()
-            tk.Label(tf, text="System Metrics Comparison", font=("Arial", 16, "bold")).pack(pady=5)
             
             grid_f = tk.Frame(tf)
             grid_f.pack(fill=tk.X, padx=10)
@@ -1055,54 +1167,65 @@ class GraphBuilderApp:
                 lbl = tk.Label(grid_f, text=m, font=("Arial", 12), relief="solid", bd=1, anchor="w", padx=5)
                 lbl.grid(row=r+1, column=0, sticky="nsew")
                 
-                # Special clickable handling for Name Column
-                if m in ["Total Cycles", "Interdependence"]:
+                # Special clickable handling for Name Column (Global Toggle)
+                if m in ["Total Cycles", "Interdependence", "Modularity"]:
                     lbl.config(fg="blue", cursor="hand2")
                     lbl.bind("<Button-1>", lambda e, name=m: toggle_compare_vis(name))
 
                 # 2. Metric Values (Columns)
                 for c, (_, g) in enumerate(gs):
                     
-                    # --- SPECIAL LOGIC FOR AVG CYCLE LENGTH ---
+                    # --- A. Cycles (Individual Buttons) ---
                     if m == "Avg Cycle Length":
                         cell_frame = tk.Frame(grid_f, bd=1, relief="solid", bg="#f0f0f0")
                         cell_frame.grid(row=r+1, column=c+1, sticky="nsew")
                         
-                        try:
-                            cycles = list(nx.simple_cycles(g))
-                            if not cycles:
-                                tk.Label(cell_frame, text="0.0", font=("Arial", 12), bg="#f0f0f0").pack()
-                            else:
-                                lengths = [len(x) for x in cycles]
-                                avg = sum(lengths) / len(lengths)
-                                
-                                # Display Average
-                                tk.Label(cell_frame, text=f"{avg:.2f} [", font=("Arial", 12), bg="#f0f0f0").pack(side=tk.LEFT)
-                                
-                                # Display Clickable Buttons
-                                for idx, length in enumerate(lengths):
-                                    btn = tk.Label(cell_frame, text=str(length), font=("Arial", 12, "bold"), 
-                                                   fg="blue", cursor="hand2", bg="#f0f0f0")
-                                    btn.pack(side=tk.LEFT)
-                                    
-                                    if idx < len(lengths) - 1:
-                                        tk.Label(cell_frame, text=", ", font=("Arial", 12), bg="#f0f0f0").pack(side=tk.LEFT)
-                                    
-                                    # Handle Click
-                                    def on_cycle_click(e, i=idx, graph=g, panel_idx=c):
-                                        target_panel = panels[panel_idx][1] 
-                                        hl = self.trigger_single_cycle_vis(i, graph)
-                                        target_panel.set_highlights(hl)
-                                        
-                                    btn.bind("<Button-1>", on_cycle_click)
-                                    
-                                tk.Label(cell_frame, text="]", font=("Arial", 12), bg="#f0f0f0").pack(side=tk.LEFT)
+                        cycles = list(nx.simple_cycles(g))
+                        items = []
+                        label = "0.0"
+                        
+                        if cycles:
+                            lengths = [len(x) for x in cycles]
+                            avg = sum(lengths) / len(lengths)
+                            label = f"{avg:.2f}"
+                            
+                            for i, cyc in enumerate(cycles):
+                                path_str = " -> ".join([str(g.nodes[n].get('label', n)) for n in cyc])
+                                items.append({'label': len(cyc), 'tooltip': f"Cycle {i+1}:\n{path_str}"})
 
-                        except Exception as e:
-                            tk.Label(cell_frame, text="Err", font=("Arial", 12)).pack()
-                            print(e)
-                    
-                    # --- STANDARD LOGIC ---
+                        def on_c_click(idx, gr=g, col=c):
+                             if col < len(panels):
+                                 panels[col][1].set_highlights(self.trigger_single_cycle_vis(idx, gr))
+
+                        # CHANGE: Pass only "blue" so all buttons are blue text
+                        # (Graph highlights will still be multicolored)
+                        mod_colors_colors = ["blue"] 
+                        self._create_scrollable_list_ui(cell_frame, label, items, cycle_colors, on_c_click).pack(fill=tk.BOTH, expand=True)
+
+                    # --- B. Modularity (Individual Buttons) ---
+                    elif m == "Modularity":
+                        cell_frame = tk.Frame(grid_f, bd=1, relief="solid", bg="#f0f0f0")
+                        cell_frame.grid(row=r+1, column=c+1, sticky="nsew")
+                        
+                        mod_val = calculate_metric(g, 'Modularity')
+                        items = []
+                        try:
+                            comms = list(nx.community.greedy_modularity_communities(g.to_undirected()))
+                            comms.sort(key=len, reverse=True)
+                            for i, comm in enumerate(comms):
+                                names = [str(g.nodes[n].get('label', n)) for n in comm]
+                                items.append({'label': len(comm), 'tooltip': f"Group {i+1}:\n" + ", ".join(names)})
+                        except: pass
+                        
+                        def on_m_click(idx, gr=g, col=c):
+                             if col < len(panels):
+                                 panels[col][1].set_highlights(self.trigger_single_modularity_vis(idx, gr))
+
+                        # CHANGE: Pass only "blue" here as well
+                        mod_colors = ["blue"]
+                        self._create_scrollable_list_ui(cell_frame, str(mod_val), items, mod_colors, on_m_click).pack(fill=tk.BOTH, expand=True)
+
+                    # --- C. Standard Metrics ---
                     else:
                         val = calculate_metric(g, m)
                         tk.Label(grid_f, text=str(val), font=("Arial", 12), relief="solid", bd=1).grid(row=r+1, column=c+1, sticky="nsew")
@@ -1266,4 +1389,20 @@ class GraphBuilderApp:
             # logic for main window
             self.current_highlights = hl
             self.active_vis_mode = f"cycle_{index}"
+            self.redraw()
+    
+    def trigger_single_modularity_vis(self, index, graph_source=None):
+        """
+        Highlights a specific modularity group.
+        """
+        target_graph = graph_source if graph_source else self.G
+        
+        # Call our new function
+        hl = metric_visualizations.get_single_modularity_highlight(target_graph, index)
+        
+        if graph_source:
+            return hl
+        else:
+            self.current_highlights = hl
+            self.active_vis_mode = f"mod_group_{index}"
             self.redraw()

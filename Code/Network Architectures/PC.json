@@ -1,0 +1,51 @@
+{
+    "GraphData": {
+        "Nodes": {
+            "ComputeLogic": { "Type": "DistributedWorkFunction", "UserData": "ComputeLogic" },
+            "RenderGraphics": { "Type": "DistributedWorkFunction", "UserData": "RenderGraphics" },
+            "StoreVolatileData": { "Type": "DistributedWorkFunction", "UserData": "StoreVolatileData" },
+            "SupplyPower": { "Type": "DistributedWorkFunction", "UserData": "SupplyPower" },
+            "DissipateHeat": { "Type": "DistributedWorkFunction", "UserData": "DissipateHeat" },
+            "StoreLongTermFiles": { "Type": "DistributedWorkFunction", "UserData": "StoreLongTermFiles" },
+            "ConnectToInternet": { "Type": "DistributedWorkFunction", "UserData": "ConnectToInternet" },
+
+            "CentralProcessor": { "Type": "BaseEnvironmentResource", "UserData": "CentralProcessor (CPU)" },
+            "DiscreteGPU": { "Type": "BaseEnvironmentResource", "UserData": "DiscreteGPU (Graphics Card)" },
+            "RAMStick": { "Type": "BaseEnvironmentResource", "UserData": "RAMStick (DIMM Slot)" },
+            "PowerSupplyUnit": { "Type": "BaseEnvironmentResource", "UserData": "PowerSupplyUnit (PSU)" },
+            "CaseFan": { "Type": "BaseEnvironmentResource", "UserData": "CaseFan (Generic Airflow)" },
+            "SolidStateDrive": { "Type": "BaseEnvironmentResource", "UserData": "SolidStateDrive (SATA/M.2)" },
+            "WiFiCard": { "Type": "BaseEnvironmentResource", "UserData": "WiFiCard (PCIe)" }
+        },
+        "Edges": [
+            { "Source": "ComputeLogic", "Target": "CentralProcessor", "UserData": { "QOS": "EXCLUSIVE_COMPUTE" } },
+            { "Source": "CentralProcessor", "Target": "ComputeLogic", "UserData": { "QOS": "" } },
+
+            { "Source": "RenderGraphics", "Target": "DiscreteGPU", "UserData": { "QOS": "DEDICATED_VRAM" } },
+            { "Source": "DiscreteGPU", "Target": "RenderGraphics", "UserData": { "QOS": "" } },
+
+            { "Source": "StoreVolatileData", "Target": "RAMStick", "UserData": { "QOS": "SLOTTED_MEMORY" } },
+            { "Source": "RAMStick", "Target": "StoreVolatileData", "UserData": { "QOS": "" } },
+
+            { "Source": "SupplyPower", "Target": "PowerSupplyUnit", "UserData": { "QOS": "STANDARD_RAIL" } },
+            { "Source": "PowerSupplyUnit", "Target": "SupplyPower", "UserData": { "QOS": "" } },
+
+            { "Source": "DissipateHeat", "Target": "CaseFan", "UserData": { "QOS": "AMBIENT_AIR" } },
+            { "Source": "CaseFan", "Target": "DissipateHeat", "UserData": { "QOS": "" } },
+
+            { "Source": "StoreLongTermFiles", "Target": "SolidStateDrive", "UserData": { "QOS": "SWAPPABLE_STORAGE" } },
+            { "Source": "SolidStateDrive", "Target": "StoreLongTermFiles", "UserData": { "QOS": "" } },
+
+            { "Source": "ConnectToInternet", "Target": "WiFiCard", "UserData": { "QOS": "PERIPHERAL" } },
+            { "Source": "WiFiCard", "Target": "ConnectToInternet", "UserData": { "QOS": "" } },
+
+            { "Source": "PowerSupplyUnit", "Target": "DiscreteGPU", "UserData": { "QOS": "CABLED_POWER" } },
+            { "Source": "PowerSupplyUnit", "Target": "CentralProcessor", "UserData": { "QOS": "CABLED_POWER" } }
+        ],
+        "Agents": {
+            "SystemBuilder": {
+                "Authority": ["CentralProcessor", "DiscreteGPU", "RAMStick", "PowerSupplyUnit", "SolidStateDrive"]
+            }
+        }
+    }
+}

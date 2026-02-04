@@ -1,0 +1,45 @@
+{
+    "GraphData": {
+        "Nodes": {
+            "GenerateLift": { "Type": "DistributedWorkFunction", "UserData": "GenerateLift" },
+            "ControlYaw": { "Type": "DistributedWorkFunction", "UserData": "ControlYaw" },
+            "ControlPitch": { "Type": "DistributedWorkFunction", "UserData": "ControlPitch" },
+            "GenerateThrust": { "Type": "DistributedWorkFunction", "UserData": "GenerateThrust" },
+            "CoolSystems": { "Type": "DistributedWorkFunction", "UserData": "CoolSystems" },
+            "StoreFuel": { "Type": "DistributedWorkFunction", "UserData": "StoreFuel" },
+            
+            "MainWingStructure": { "Type": "BaseEnvironmentResource", "UserData": "MainWingStructure (Composite)" },
+            "VerticalStabilizer": { "Type": "BaseEnvironmentResource", "UserData": "VerticalStabilizer (Tail Fin)" },
+            "HorizontalStabilizer": { "Type": "BaseEnvironmentResource", "UserData": "HorizontalStabilizer (Tailplane)" },
+            "EngineNacelle": { "Type": "BaseEnvironmentResource", "UserData": "EngineNacelle (Podded)" },
+            "RamAirScoop": { "Type": "BaseEnvironmentResource", "UserData": "RamAirScoop (Dedicated Intake)" },
+            "WingFuelTank": { "Type": "BaseEnvironmentResource", "UserData": "WingFuelTank (Discrete Volume)" }
+        },
+        "Edges": [
+            { "Source": "GenerateLift", "Target": "MainWingStructure", "UserData": { "QOS": "PRIMARY_LIFT" } },
+            { "Source": "MainWingStructure", "Target": "GenerateLift", "UserData": { "QOS": "" } },
+            
+            { "Source": "ControlYaw", "Target": "VerticalStabilizer", "UserData": { "QOS": "EXCLUSIVE_FUNCTION" } },
+            { "Source": "VerticalStabilizer", "Target": "ControlYaw", "UserData": { "QOS": "" } },
+
+            { "Source": "ControlPitch", "Target": "HorizontalStabilizer", "UserData": { "QOS": "EXCLUSIVE_FUNCTION" } },
+            { "Source": "HorizontalStabilizer", "Target": "ControlPitch", "UserData": { "QOS": "" } },
+
+            { "Source": "GenerateThrust", "Target": "EngineNacelle", "UserData": { "QOS": "MODULAR_MOUNT" } },
+            { "Source": "EngineNacelle", "Target": "GenerateThrust", "UserData": { "QOS": "" } },
+
+            { "Source": "CoolSystems", "Target": "RamAirScoop", "UserData": { "QOS": "INDEPENDENT_COOLING" } },
+            { "Source": "RamAirScoop", "Target": "CoolSystems", "UserData": { "QOS": "" } },
+
+            { "Source": "StoreFuel", "Target": "WingFuelTank", "UserData": { "QOS": "STORAGE_ONLY" } },
+            { "Source": "WingFuelTank", "Target": "StoreFuel", "UserData": { "QOS": "" } },
+
+            { "Source": "MainWingStructure", "Target": "EngineNacelle", "UserData": { "QOS": "PHYSICAL_MOUNT_ONLY" } }
+        ],
+        "Agents": {
+            "FlightControlComputer": {
+                "Authority": ["GenerateLift", "ControlYaw", "ControlPitch", "GenerateThrust"]
+            }
+        }
+    }
+}

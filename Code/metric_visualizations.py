@@ -115,3 +115,94 @@ def get_interdependence_highlights(G):
         "color": "#FF0000", # Bright Red for critical dependencies
         "width": 8
     }]
+# metric_visualizations.py
+
+def get_modularity_highlights(G):
+    """
+    Detects communities and assigns a unique color to each group.
+    Colors nodes and 'intra-community' edges (edges within the same group).
+    """
+    try:
+        # 1. Detect Communities
+        # Returns a list of sets: [{n1, n2}, {n3, n4}...]
+        communities = nx.community.greedy_modularity_communities(G.to_undirected())
+        
+        highlights = []
+        
+        # 2. Define Palette
+        community_colors = [
+            "#FF6B6B", # Red
+            "#4ECDC4", # Teal
+            "#45B7D1", # Blue
+            "#FFA07A", # Light Salmon
+            "#98D8C8", # Pale Green
+            "#F7DC6F", # Yellow
+            "#BB8FCE", # Purple
+            "#B2BABB", # Gray
+        ]
+
+        for i, community_set in enumerate(communities):
+            color = community_colors[i % len(community_colors)]
+            nodes_list = list(community_set)
+            
+            # Find edges that stay COMPLETELY within this community
+            intra_edges = []
+            for u in nodes_list:
+                for v in nodes_list:
+                    if G.has_edge(u, v):
+                        intra_edges.append((u, v))
+            
+            # Create Highlight Group
+            highlights.append({
+                "nodes": nodes_list,
+                "edges": intra_edges,
+                "color": color,
+                "width": 10 # Thick highlight for groups
+            })
+            
+        return highlights
+
+    except Exception as e:
+        print(f"Modularity Vis Error: {e}")
+        return []
+    
+def get_single_modularity_highlight(G, group_index):
+    """
+    Highlights ONLY the specific community group at the given index.
+    """
+    try:
+        # 1. Detect Communities (Must use same method as the main visualizer)
+        communities = list(nx.community.greedy_modularity_communities(G.to_undirected()))
+        
+        # Sort by size (largest first) to keep UI consistent
+        communities.sort(key=len, reverse=True)
+        
+        if group_index < 0 or group_index >= len(communities):
+            return []
+            
+        target_group = list(communities[group_index])
+        
+        # 2. Match Colors (Use same palette as full view for consistency)
+        community_colors = [
+            "#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", 
+            "#98D8C8", "#F7DC6F", "#BB8FCE", "#B2BABB"
+        ]
+        color = community_colors[group_index % len(community_colors)]
+        
+        # 3. Find edges within this group
+        intra_edges = []
+        for u in target_group:
+            for v in target_group:
+                if G.has_edge(u, v):
+                    intra_edges.append((u, v))
+                    
+        return [{
+            "nodes": target_group,
+            "edges": intra_edges,
+            "color": color,
+            "width": 10
+        }]
+
+    except Exception as e:
+        print(f"Modularity Single Error: {e}")
+        return []
