@@ -883,109 +883,194 @@ class GraphBuilderApp:
     
     def initiate_save_json(self):
         fp = filedialog.asksaveasfilename(defaultextension=".json")
-        if not fp: return
+        if not fp:
+            return
 
-        # Prepare Data Structure
         nodes_dict = {}
         agent_authorities = {name: [] for name in self.agents}
-        
+
         for nid, d in self.G.nodes(data=True):
             lbl = d.get('label', f"Node_{nid}")
             layer = d.get('layer', "Base Environment").replace(" ", "")
             typ = d.get('type', "Function")
-            nodes_dict[lbl] = {"Type": f"{layer}{typ}", "UserData": lbl}
-            
+
+            pos = d.get("pos", (100, 100))  # <-- NEW
+            nodes_dict[lbl] = {
+                "Type": f"{layer}{typ}",
+                "UserData": lbl,
+                "Pos": [pos[0], pos[1]],    # <-- NEW
+            }
+
             ag_list = d.get('agent', ["Unassigned"])
-            if not isinstance(ag_list, list): ag_list = [ag_list]
+            if not isinstance(ag_list, list):
+                ag_list = [ag_list]
             for ag in ag_list:
-                if ag in agent_authorities: agent_authorities[ag].append(lbl)
+                if ag in agent_authorities:
+                    agent_authorities[ag].append(lbl)
 
         edges_list = []
-        for u, v, d in self.G.edges(data=True): 
+        for u, v, d in self.G.edges(data=True):
             edges_list.append({
                 "Source": self.G.nodes[u].get('label', f"Node_{u}"),
                 "Target": self.G.nodes[v].get('label', f"Node_{v}"),
                 "UserData": {"type": d.get('type', config.EDGE_TYPE_HARD)}
             })
 
-        final = {"GraphData": {
-            "Nodes": nodes_dict, 
-            "Edges": edges_list, 
-            "Agents": {name: {"Authority": auth} for name, auth in agent_authorities.items()}
-        }}
+        final = {
+            "GraphData": {
+                "Nodes": nodes_dict,
+                "Edges": edges_list,
+                "Agents": {
+                    name: {
+                        "Color": self.agents.get(name, config.DEFAULT_AGENTS.get(name, "#808080")),
+                        "Authority": auth
+                    }
+                    for name, auth in agent_authorities.items()
+                }
+            }
+        }
 
-        with open(fp, 'w') as f: json.dump(final, f, indent=4)
+        with open(fp, 'w', encoding='utf-8') as f:
+            json.dump(final, f, indent=4)
+
 
     def load_from_json(self):
-        fp = filedialog.askopenfilename()
-        if not fp: return
+        fp = filedialog.askopenfilename(
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if not fp:
+            return
+
         try:
-            with open(fp, 'r', encoding='utf-8-sig') as f: data = json.load(f)["GraphData"]
-            
+            with open(fp, "r", encoding="utf-8-sig") as f:
+                graphdata = json.load(f).get("GraphData", {})
+
+            # Save state for undo + clear current graph
             self.save_state()
             self.G.clear()
+
+            # Start from defaults, then override/add from file
             self.agents = config.DEFAULT_AGENTS.copy()
-            
-            # 1. Load Agents
-            label_to_agents = {}
-            for ag_name, ag_data in data.get("Agents", {}).items():
-                if ag_name not in self.agents: 
-                    self.agents[ag_name] = "#" + ''.join([random.choice('ABCDEF89') for _ in range(6)])
-                for node_lbl in ag_data.get("Authority", []):
-                    label_to_agents.setdefault(node_lbl, []).append(ag_name)
-            
-            # 2. Load Nodes
+
+            # Guarantee Unassigned exists
+            if "Unassigned" not in self.agents:
+                self.agents["Unassigned"] = "#FFFFFF"
+
+            # ---------- 1) Load Agents (colors + authority lists) ----------
+            label_to_agents = {}  # node_label -> set(agent_names)
+            agents_in = graphdata.get("Agents", {}) or {}
+
+            for ag_name, ag_data in agents_in.items():
+                ag_name = str(ag_name).strip()
+
+                if isinstance(ag_data, dict):
+                    color = ag_data.get("Color")
+                    auth_list = ag_data.get("Authority", []) or []
+                else:
+                    # Backward-compatible: if Agents maps to a list directly
+                    color = None
+                    auth_list = ag_data or []
+
+                # Apply color
+                if color:
+                    self.agents[ag_name] = color
+                else:
+                    # If no color provided and not in defaults, create one
+                    if ag_name not in self.agents:
+                        self.agents[ag_name] = "#" + "".join(
+                            random.choice("ABCDEF89") for _ in range(6)
+                        )
+
+                # Build node_label -> agents map from Authority
+                for node_lbl in auth_list:
+                    node_lbl = str(node_lbl).strip()
+                    label_to_agents.setdefault(node_lbl, set()).add(ag_name)
+
+            # ---------- 2) Load Nodes ----------
             label_to_id = {}
-            layer_counters = {l: 100 for l in config.LAYER_ORDER}
-            
-            for i, (lbl, props) in enumerate(data.get("Nodes", {}).items()):
+            layer_counters = {layer: 100 for layer in config.LAYER_ORDER}
+
+            nodes_in = graphdata.get("Nodes", {}) or {}
+            for i, (lbl, props) in enumerate(nodes_in.items()):
+                lbl = str(lbl).strip()
+                props = props or {}
+
                 n_type, n_layer = self._parse_node_attributes(props.get("Type", ""))
-                
-                # Position logic
-                pos_y = config.JSAT_LAYERS.get(n_layer, 550)
-                pos_x = layer_counters.get(n_layer, 100)
-                layer_counters[n_layer] = pos_x + 120
-                
-                assigned = label_to_agents.get(lbl, ["Unassigned"])
-                self.G.add_node(i, pos=(pos_x, pos_y), layer=n_layer, type=n_type, 
-                                label=props.get("UserData", lbl), agent=assigned)
+
+                # NEW: if the JSON has a saved position, use it
+                pos_in = props.get("Pos")
+                if isinstance(pos_in, (list, tuple)) and len(pos_in) == 2:
+                    pos_x, pos_y = float(pos_in[0]), float(pos_in[1])
+                else:
+                    # fallback for older JSONs that don't have Pos
+                    pos_y = config.JSAT_LAYERS.get(n_layer, 550)
+                    pos_x = layer_counters.get(n_layer, 100)
+                    layer_counters[n_layer] = pos_x + 120
+
+                assigned_agents = sorted(label_to_agents.get(lbl, {"Unassigned"}))
+
+                self.G.add_node(
+                    i,
+                    pos=(pos_x, pos_y),
+                    layer=n_layer,
+                    type=n_type,
+                    label=props.get("UserData", lbl),
+                    agent=assigned_agents,
+                )
                 label_to_id[lbl] = i
 
-            # 3. Load Edges
-            for e in data.get("Edges", []):
-                u, v = label_to_id.get(e["Source"]), label_to_id.get(e["Target"])
-                if u is not None and v is not None:
-                    self.G.add_edge(u, v, type=e.get("UserData", {}).get("type", config.EDGE_TYPE_HARD))
-            
+            # ---------- 3) Load Edges ----------
+            for e in (graphdata.get("Edges", []) or []):
+                src_lbl = str(e.get("Source", "")).strip()
+                tgt_lbl = str(e.get("Target", "")).strip()
+
+                u = label_to_id.get(src_lbl)
+                v = label_to_id.get(tgt_lbl)
+                if u is None or v is None:
+                    continue
+
+                e_type = (e.get("UserData", {}) or {}).get("type", config.EDGE_TYPE_HARD)
+                self.G.add_edge(u, v, type=e_type)
+
             self.redraw()
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load: {e}")
 
+
     def _parse_node_attributes(self, combined_string):
-        """Extracts (Type, Layer) from the specific JSON string format."""
+        """
+        Extracts (Type, Layer) from the specific JSON string format:
+        e.g., "DistributedWorkFunction", "BaseEnvironmentResource"
+        """
+        combined_string = str(combined_string or "")
+
         n_type = "Resource"
         layer = "Base Environment"
-        
+
         if combined_string.endswith("Function"):
             n_type = "Function"
-            prefix = combined_string.replace("Function", "")
+            prefix = combined_string[: -len("Function")]
         elif combined_string.endswith("Resource"):
-            prefix = combined_string.replace("Resource", "")
+            n_type = "Resource"
+            prefix = combined_string[: -len("Resource")]
         else:
             prefix = combined_string
-            
+
         norm_prefix = prefix.lower().replace(" ", "")
         for known in config.LAYER_ORDER:
             if known.lower().replace(" ", "") == norm_prefix:
                 layer = known
                 break
+
         return n_type, layer
 
     # Comparative Analytics 
 
     def save_architecture_internal(self):
         n = simpledialog.askstring("Name", "Name:")
-        if n: self.saved_archs[n] = self.G.copy()
+        if n: 
+            self.saved_archs[n] = self.G.copy()
 
     def open_comparison_dialog(self):
         if not self.saved_archs: 
