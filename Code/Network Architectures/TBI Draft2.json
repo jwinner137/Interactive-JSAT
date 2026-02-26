@@ -1,0 +1,123 @@
+{
+    "GraphData": {
+        "Nodes": {
+            "Hypoxemia Management": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Hypoxemia Management",
+                "Pos": [
+                    2107.8559663947694,
+                    79.33944125799233
+                ]
+            },
+            "Intercranial Pressure/CPP Monitoring": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Intercranial Pressure/CPP Monitoring",
+                "Pos": [
+                    774.5790060902128,
+                    418.3380286056846
+                ]
+            },
+            "Maintain Normothermia": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Maintain Normothermia",
+                "Pos": [
+                    124.42288085170635,
+                    582.4049741994766
+                ]
+            },
+            "Managing Sedation": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Managing Sedation",
+                "Pos": [
+                    703.3334252059861,
+                    175.83335630149654
+                ]
+            },
+            "Controlling Pain": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Controlling Pain",
+                "Pos": [
+                    184.0,
+                    348.0
+                ]
+            },
+            "Manage Suspected spinal cord injury": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Manage Suspected spinal cord injury",
+                "Pos": [
+                    770.3629431456712,
+                    675.0603110039388
+                ]
+            },
+            "Patient Status/Vitals": {
+                "Type": "BaseEnvironmentResource",
+                "UserData": "Patient Status/Vitals",
+                "Pos": [
+                    1649.6151641505373,
+                    662.3454825755945
+                ]
+            },
+            "Monitoring (RCP, Hypoxemia Management)": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Monitoring (RCP, Hypoxemia Management)",
+                "Pos": [
+                    2118.5775125107143,
+                    229.44108688122108
+                ]
+            },
+            "Monitoring (RN, Hypoexemia Management)": {
+                "Type": "DistributedWorkFunction",
+                "UserData": "Monitoring (RN, Hypoexemia Management)",
+                "Pos": [
+                    2127.1547494034703,
+                    388.11996939720575
+                ]
+            }
+        },
+        "Edges": [
+            {
+                "Source": "Patient Status/Vitals",
+                "Target": "Managing Sedation",
+                "UserData": {
+                    "type": "hard"
+                }
+            }
+        ],
+        "Agents": {
+            "Unassigned": {
+                "Color": "white",
+                "Authority": [
+                    "Patient Status/Vitals"
+                ]
+            },
+            "MD": {
+                "Color": "Blue",
+                "Authority": [
+                    "Hypoxemia Management",
+                    "Intercranial Pressure/CPP Monitoring",
+                    "Managing Sedation",
+                    "Controlling Pain"
+                ]
+            },
+            "RN": {
+                "Color": "Red",
+                "Authority": [
+                    "Hypoxemia Management",
+                    "Intercranial Pressure/CPP Monitoring",
+                    "Maintain Normothermia",
+                    "Managing Sedation",
+                    "Controlling Pain",
+                    "Manage Suspected spinal cord injury",
+                    "Monitoring (RN, Hypoexemia Management)"
+                ]
+            },
+            "RCP": {
+                "Color": "Green",
+                "Authority": [
+                    "Hypoxemia Management",
+                    "Monitoring (RCP, Hypoxemia Management)"
+                ]
+            }
+        }
+    }
+}
